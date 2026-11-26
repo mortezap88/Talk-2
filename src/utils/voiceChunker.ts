@@ -119,11 +119,11 @@ export class SilenceAudioChunker {
   private hasSpoken = false;
   private speechSamples = 0;
   private silenceMs = 0;
-  private noiseFloor = 0.005;
+  private noiseFloor = 0.003;
 
   constructor(options: VoiceChunkerOptions) {
     this.inputSampleRate = options.sampleRate;
-    this.speechThreshold = options.speechThreshold ?? 0.015;
+    this.speechThreshold = options.speechThreshold ?? 0.006;
     this.silenceCutMs = options.silenceCutMs ?? 300;
     this.minPatchMs = options.minPatchMs ?? 20000;
     this.maxPatchMs = options.maxPatchMs ?? 45000;

@@ -53,7 +53,7 @@ export function QuestionsTab({
 
   return (
     <div
-      className={`flex-1 min-h-0 overflow-y-auto ${
+      className={`doc-scroll flex-1 min-h-0 overflow-y-auto ${
         isReadMode
           ? 'bg-white dark:bg-slate-900 px-5 sm:px-7 pt-14 pb-8'
           : 'bg-slate-50 dark:bg-slate-950 px-4 sm:px-5 pt-14 pb-5'

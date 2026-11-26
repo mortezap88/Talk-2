@@ -74,6 +74,45 @@ export function createEmptyMemory(now = Date.now()): ChatMemory {
   };
 }
 
+const HIGHLIGHT_MARKUP_RE =
+  /(?<![A-Za-z0-9])`?(==|@@|!!|\+\+)(?!\s)([^\n]*?\S)\1`?/g;
+
+export function stripHighlightMarkup(text: string): string {
+  if (!text) return '';
+  let result = text;
+  for (let i = 0; i < 2; i++) {
+    const next = result.replace(HIGHLIGHT_MARKUP_RE, (_match, _delim, inner: string) => inner);
+    if (next === result) break;
+    result = next;
+  }
+  return result;
+}
+
+export function sanitizeMemoryPackOutput(raw: {
+  summary: string;
+  bullets: string[];
+}): { summary: string; bullets: string[] } {
+  const summary = stripHighlightMarkup(typeof raw.summary === 'string' ? raw.summary : '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const seen = new Set<string>();
+  const bullets: string[] = [];
+  for (const item of Array.isArray(raw.bullets) ? raw.bullets : []) {
+    const cleaned = stripHighlightMarkup(String(item || ''))
+      .replace(/^[-*•]\s+/, '')
+      .trim();
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    bullets.push(cleaned);
+    if (bullets.length >= 5) break;
+  }
+
+  return { summary, bullets };
+}
+
 export function sortLearnerState(concepts: ConceptState[]): ConceptState[] {
   return [...concepts]
     .sort((a, b) => {
@@ -82,6 +121,57 @@ export function sortLearnerState(concepts: ConceptState[]): ConceptState[] {
       return b.updatedAt - a.updatedAt;
     })
     .slice(0, MAX_LEARNER_CONCEPTS);
+}
+
+const VALID_CONCEPT_STATUSES = new Set<ConceptStatus>([
+  'misunderstood',
+  'unresolved',
+  'shaky',
+  'understood',
+]);
+
+export function mergeLearnerState(
+  currentState: ConceptState[],
+  incoming: ConceptState[],
+  now = Date.now()
+): ConceptState[] {
+  const byKey = new Map<string, ConceptState>();
+
+  for (const item of currentState || []) {
+    const concept = stripHighlightMarkup(item.concept || '').trim();
+    if (!concept) continue;
+    const key = concept.toLowerCase();
+    const status: ConceptStatus = VALID_CONCEPT_STATUSES.has(item.status)
+      ? item.status
+      : 'unresolved';
+    byKey.set(key, {
+      id: item.id,
+      concept,
+      status,
+      note: stripHighlightMarkup(item.note || '').trim(),
+      updatedAt: item.updatedAt || now,
+    });
+  }
+
+  for (const item of incoming || []) {
+    const concept = stripHighlightMarkup(item.concept || '').trim();
+    if (!concept) continue;
+    const key = concept.toLowerCase();
+    const existing = byKey.get(key);
+    const status: ConceptStatus = VALID_CONCEPT_STATUSES.has(item.status)
+      ? item.status
+      : 'unresolved';
+    const note = stripHighlightMarkup(item.note || '').trim();
+    byKey.set(key, {
+      id: existing?.id || item.id,
+      concept,
+      status,
+      note: note || existing?.note || '',
+      updatedAt: item.updatedAt || now,
+    });
+  }
+
+  return sortLearnerState(Array.from(byKey.values()));
 }
 
 export interface ActiveWindowAnalysis {
@@ -222,12 +312,29 @@ The Talk UI renders rich study formatting directly in your prose. Write these ma
   // 1. Living Learner State (always first & authoritative)
   const sortedConcepts = sortLearnerState(memory.learnerState);
   if (sortedConcepts.length > 0) {
-    const lines = sortedConcepts.map(
-      (c) => `- [${c.status.toUpperCase()}] ${c.concept}: ${c.note}`
-    );
-    sections.push(
-      `## Living Learner State (AUTHORITATIVE — overrides older episodic memory packs)\n${lines.join('\n')}`
-    );
+    const blindspotLines = sortedConcepts
+      .filter((c) => c.status !== 'understood')
+      .map(
+        (c) =>
+          `- [${c.status.toUpperCase()}] ${stripHighlightMarkup(c.concept)}: ${stripHighlightMarkup(c.note)}`
+      );
+    const improvementLines = sortedConcepts
+      .filter((c) => c.status === 'understood')
+      .map(
+        (c) =>
+          `- [UNDERSTOOD] ${stripHighlightMarkup(c.concept)}: ${stripHighlightMarkup(c.note)}`
+      );
+    const stateBlocks: string[] = [
+      '## Living Learner State (AUTHORITATIVE — overrides older episodic memory packs)',
+      'Actively address open blindspots below, and build upon mastered/improved concepts without re-explaining them from scratch.',
+    ];
+    if (blindspotLines.length > 0) {
+      stateBlocks.push(`### Blindspots & Open Gaps\n${blindspotLines.join('\n')}`);
+    }
+    if (improvementLines.length > 0) {
+      stateBlocks.push(`### Understanding Improvements & Mastered\n${improvementLines.join('\n')}`);
+    }
+    sections.push(stateBlocks.join('\n'));
   }
 
   // 2. Rolling 15-Slot Episodic Memory Packs: select newest-first under budget, present chronologically

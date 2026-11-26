@@ -233,7 +233,6 @@ export function TextbookTab({
     code?: string;
   } | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textAreaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -811,7 +810,7 @@ export function TextbookTab({
 
   return (
     <div
-      className={`flex-1 min-h-0 overflow-y-auto ${
+      className={`doc-scroll flex-1 min-h-0 overflow-y-auto ${
         isReadMode
           ? 'bg-white dark:bg-slate-900'
           : 'bg-slate-50 dark:bg-slate-950 px-4 sm:px-5 pt-14 pb-5'
@@ -857,31 +856,8 @@ export function TextbookTab({
                 }`
           }
         >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              if (e.target.files?.length) {
-                void processTextbookImages(e.target.files);
-              }
-              e.target.value = '';
-            }}
-          />
-
-          {!isReadMode && !isAnalyzing ? (
+          {!isReadMode && !isAnalyzing && hasAnyContent ? (
             <div className="flex flex-wrap items-center justify-end gap-1.5">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1.5 whitespace-nowrap"
-              >
-                <ImagePlus className="w-3.5 h-3.5" />
-                <span>Add image</span>
-              </button>
-
               {committedBlocks.length > 0 || tailText.trim().length > 0 ? (
                 <button
                   type="button"

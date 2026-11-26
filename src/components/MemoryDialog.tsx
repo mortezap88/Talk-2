@@ -8,6 +8,7 @@ import {
   getRollingPacks,
   PACK_SLOTS,
   sortLearnerState,
+  stripHighlightMarkup,
 } from '../utils/memoryEngine';
 import { formatRelativeTime } from '../utils/formatters';
 import { RichInlineText } from './RichMessage';
@@ -190,7 +191,7 @@ export function MemoryDialog({
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            <div className="doc-scroll flex-1 overflow-y-auto space-y-2 pr-1">
               {analysis.activeWindow.length === 0 ? (
                 <p className="text-xs text-slate-500 dark:text-slate-400 py-8 text-center">
                   No messages in active window yet.
@@ -240,20 +241,20 @@ export function MemoryDialog({
                   </span>
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                <div className="doc-scroll flex-1 overflow-y-auto space-y-3 pr-1">
                   <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
                     <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-                      Packed Notes &amp; Quotes (~80% retention)
+                      Packed Study Memory (Subtopics, Conclusions, Blindspots &amp; Progress)
                     </div>
                     <p dir="auto" className="bidi-plaintext whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-200 leading-relaxed">
-                      <RichInlineText text={selectedPack.summary} />
+                      <RichInlineText text={stripHighlightMarkup(selectedPack.summary)} />
                     </p>
                   </div>
 
                   {selectedPack.bullets.length > 0 ? (
                     <div>
                       <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
-                        Highlights
+                        Key Takeaways
                       </div>
                       <ul className="space-y-2">
                         {selectedPack.bullets.map((b, i) => (
@@ -262,7 +263,7 @@ export function MemoryDialog({
                             dir="auto"
                             className="bidi-plaintext p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 leading-relaxed"
                           >
-                            <RichInlineText text={b} />
+                            <RichInlineText text={stripHighlightMarkup(b)} />
                           </li>
                         ))}
                       </ul>
@@ -284,7 +285,7 @@ export function MemoryDialog({
                   Right-click a concept to remove it. Ordered by priority.
                 </p>
 
-                <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                <div className="doc-scroll flex-1 overflow-y-auto space-y-2 pr-1">
                   {sortedConcepts.length === 0 ? (
                     <p className="text-xs text-slate-500 dark:text-slate-400 py-8 text-center">
                       No concepts tracked yet. Concepts update automatically as memory packs are created.
@@ -335,7 +336,7 @@ export function MemoryDialog({
           </section>
 
           {/* Right — Single-Stage 15-Slot Rolling Packs */}
-          <section aria-label="Memory packs" className="flex flex-col min-h-0 p-4 gap-3 overflow-y-auto">
+          <section aria-label="Memory packs" className="doc-scroll flex flex-col min-h-0 p-4 gap-3 overflow-y-auto">
             <div className="flex items-center justify-between shrink-0">
               <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
                 Packs
@@ -380,7 +381,7 @@ export function MemoryDialog({
               </div>
 
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
-                Every ~1,000 tokens beyond the last 10 messages is packed (~80% kept: 50% quotes, 50% notes) into P1, shifting older packs toward P15.
+                Every ~1,000 tokens beyond the last 10 messages is compacted into P1 (subtopics, conclusions, blindspots &amp; understanding progress), shifting older packs toward P15.
               </p>
 
               <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">

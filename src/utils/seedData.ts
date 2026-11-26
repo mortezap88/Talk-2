@@ -64,17 +64,32 @@ export function createSeedWorkspace(now = Date.now()): PersistedWorkspace {
     compactedCount: 1,
     compactedTokens: 980,
     epoch: 1,
-    learnerState: [],
+    learnerState: [
+      {
+        id: 'cs_seed_salt_bridge',
+        concept: 'His146(beta)–Asp94 Salt Bridge',
+        status: 'shaky',
+        note: 'Need to connect His146 protonation at lower pH to T-state dimer stabilization.',
+        updatedAt: now - 1000 * 60 * 20,
+      },
+      {
+        id: 'cs_seed_bohr_shift',
+        concept: 'Bohr Curve Right-Shift Direction',
+        status: 'understood',
+        note: 'Improved: resolved confusion between left/right O2 affinity shifts under exercise.',
+        updatedAt: now - 1000 * 60 * 15,
+      },
+    ],
     packs: [
       {
         id: 'pack_s1_1',
         stage: 1,
         summary:
-          'Reviewed myoglobin vs. hemoglobin quaternary structure, P50 comparison, and initial Hill coefficient intuition.',
+          '**Discussed & Subtopics Covered:** Myoglobin vs. hemoglobin quaternary structure, P50 comparison (~2.8 vs. ~26 mmHg), and Hill coefficient intuition.\n**Conclusions:** Monomeric myoglobin shows hyperbolic O2 binding; tetrameric HbA shows sigmoidal cooperative binding.\n**Blindspots:** Role of alpha-beta salt-bridge cleavage in T-to-R transitions needs follow-up.',
         bullets: [
           'Distinguished monomeric myoglobin (hyperbolic) from tetrameric hemoglobin (sigmoidal).',
           'Confirmed P50 for myoglobin is ~2.8 mmHg vs. ~26 mmHg for HbA.',
-          'Flagged salt-bridge cleavage between alpha-beta dimers as an area to revisit.',
+          'Blindspot: salt-bridge cleavage between alpha-beta dimers flagged to revisit.',
         ],
         tokenCount: 145,
         sourceRange: [0, 2],
@@ -84,7 +99,7 @@ export function createSeedWorkspace(now = Date.now()): PersistedWorkspace {
         id: 'pack_s1_2',
         stage: 1,
         summary:
-          'Worked through CO2 hydration via carbonic anhydrase and protonation of His146 on beta subunits.',
+          '**Discussed & Subtopics Covered:** CO2 hydration via carbonic anhydrase and His146 protonation on beta subunits.\n**Conclusions:** Derived $\\text{H}_2\\text{O} + \\text{CO}_2 \\rightleftharpoons \\text{H}^+ + \\text{HCO}_3^-$ and linked His146(beta) protonation to Asp94 T-state stabilization.\n**Understanding Improvements:** Clarified why lower pH shifts the dissociation curve rightward to release O2 in active muscle.',
         bullets: [
           'Derived H2O + CO2 ⇌ H2CO3 ⇌ H+ + HCO3- inside erythrocytes.',
           'Linked His146(beta) protonation to Asp94 salt-bridge stabilization in T-state.',
@@ -97,7 +112,7 @@ export function createSeedWorkspace(now = Date.now()): PersistedWorkspace {
         id: 'pack_s2_1',
         stage: 2,
         summary:
-          'Consolidated respiratory gas transport foundations: oxygen binding equilibria, cooperative subunit transitions, and red-cell buffering.',
+          '**Discussed & Subtopics Covered:** Respiratory gas transport foundations, O2 binding equilibria, cooperative subunit transitions, and red-cell buffering.\n**Conclusions:** Core R-state vs. T-state equilibrium established across lung and muscle PO2.',
         bullets: [
           'Core R-state vs. T-state equilibrium established across lung and muscle PO2.',
           'Identified pH/PCO2 shift mechanics as primary exam focus.',

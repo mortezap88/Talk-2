@@ -1,12 +1,28 @@
 import { useState } from 'react';
-import { AlertCircle, ArrowLeft, Database, Loader2, RefreshCw } from 'lucide-react';
-import type { ChatMemory, ChatMessage, MemoryPack, RightPanelMode } from '../types/talk';
+import {
+  AlertCircle,
+  ArrowLeft,
+  Database,
+  Loader2,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react';
+import type {
+  ChatMemory,
+  ChatMessage,
+  ConceptStatus,
+  MemoryPack,
+  RightPanelMode,
+} from '../types/talk';
 import {
   ACTIVE_WINDOW_MAX_MESSAGES,
   analyzeActiveWindow,
   COMPACTION_TRIGGER_TOKENS,
   getRollingPacks,
+  MAX_LEARNER_CONCEPTS,
   PACK_SLOTS,
+  sortLearnerState,
+  stripHighlightMarkup,
 } from '../utils/memoryEngine';
 import { formatRelativeTime } from '../utils/formatters';
 import { RichInlineText } from './RichMessage';
@@ -17,8 +33,32 @@ interface MemoryPanelProps {
   mode?: RightPanelMode;
   isCompacting: boolean;
   onCompactNow: () => void;
+  onRemoveConcept?: (conceptId: string) => void;
   onDeletePack: (packId: string) => void;
 }
+
+const STATUS_STYLE: Record<ConceptStatus, { label: string; colorClass: string }> = {
+  misunderstood: {
+    label: 'Misunderstood',
+    colorClass:
+      'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border-red-200 dark:border-red-900/70',
+  },
+  unresolved: {
+    label: 'Unresolved',
+    colorClass:
+      'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 border-amber-200 dark:border-amber-900/70',
+  },
+  shaky: {
+    label: 'Shaky',
+    colorClass:
+      'text-sky-700 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/50 border-sky-200 dark:border-sky-900/70',
+  },
+  understood: {
+    label: 'Understood',
+    colorClass:
+      'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-900/70',
+  },
+};
 
 function getSlotColorClass(slotIdx: number): string {
   if (slotIdx <= 2) {
@@ -39,12 +79,17 @@ export function MemoryPanel({
   mode = 'edit',
   isCompacting,
   onCompactNow,
+  onRemoveConcept,
   onDeletePack,
 }: MemoryPanelProps) {
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const isReadMode = mode === 'read';
 
   const analysis = analyzeActiveWindow(messages, memory.compactedCount);
+  const sortedConcepts = sortLearnerState(memory.learnerState);
+  const blindspotCount = sortedConcepts.filter((c) => c.status !== 'understood').length;
+  const understoodCount = sortedConcepts.length - blindspotCount;
+
   const rollingPacks = getRollingPacks(memory.packs);
   const selectedSlotIndex = selectedPackId
     ? rollingPacks.findIndex((p) => p.id === selectedPackId)
@@ -57,7 +102,7 @@ export function MemoryPanel({
 
   return (
     <div
-      className={`flex-1 min-h-0 overflow-y-auto ${
+      className={`doc-scroll flex-1 min-h-0 overflow-y-auto ${
         isReadMode
           ? 'bg-white dark:bg-slate-900 px-5 sm:px-7 pt-14 pb-8'
           : 'bg-slate-50 dark:bg-slate-950 px-4 sm:px-5 pt-14 pb-5'
@@ -100,50 +145,6 @@ export function MemoryPanel({
           </button>
         </div>
 
-        {/* Active Window */}
-        <section
-          aria-label="Active window"
-          className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Active Window
-            </h2>
-            <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-              {analysis.activeWindow.length} / {ACTIVE_WINDOW_MAX_MESSAGES} msgs ·{' '}
-              {analysis.activeTokens.toLocaleString()} tok
-            </span>
-          </div>
-
-          <div className="space-y-2">
-            {analysis.activeWindow.length === 0 ? (
-              <p className="text-xs text-slate-500 dark:text-slate-400 py-6 text-center">
-                No messages in active window yet.
-              </p>
-            ) : (
-              analysis.activeWindow.map((msg) => (
-                <div
-                  key={msg.id}
-                  className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 text-xs"
-                >
-                  <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
-                    <span className="font-semibold text-slate-700 dark:text-slate-200">
-                      {msg.role === 'user' ? 'Student' : 'Tutor'}
-                    </span>
-                    <span className="tabular-nums">{formatRelativeTime(msg.createdAt)}</span>
-                  </div>
-                  <p
-                    dir="auto"
-                    className="bidi-plaintext text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words leading-relaxed"
-                  >
-                    {msg.content}
-                  </p>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
         {/* Next Pack Progress */}
         <section
           aria-label="Next pack progress"
@@ -176,11 +177,93 @@ export function MemoryPanel({
           ) : null}
         </section>
 
+        {/* Blindspots & Understanding Progress (Living Learner State) */}
+        <section
+          aria-label="Blindspots and understanding progress"
+          className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Blindspots &amp; Understanding Progress
+              </h2>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Updated automatically when memory packs run so the tutor tracks open gaps and breakthroughs.
+              </p>
+            </div>
+            <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+              {blindspotCount} blindspot{blindspotCount === 1 ? '' : 's'} · {understoodCount} understood ({sortedConcepts.length}/{MAX_LEARNER_CONCEPTS})
+            </span>
+          </div>
+
+          {sortedConcepts.length === 0 ? (
+            <p className="text-xs text-slate-500 dark:text-slate-400 py-4 text-center rounded-lg border border-dashed border-slate-200 dark:border-slate-800">
+              No blindspots or concept improvements tracked yet. Pack a conversation segment to record them.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {sortedConcepts.map((item) => {
+                const style = STATUS_STYLE[item.status];
+                return (
+                  <div
+                    key={item.id}
+                    className="group p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        dir="auto"
+                        className="bidi-plaintext text-xs font-semibold text-slate-900 dark:text-slate-100"
+                      >
+                        {stripHighlightMarkup(item.concept)}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`px-2 py-0.5 text-[11px] font-medium rounded border ${style.colorClass}`}
+                        >
+                          {style.label}
+                        </span>
+                        {onRemoveConcept ? (
+                          <button
+                            type="button"
+                            onClick={() => onRemoveConcept(item.id)}
+                            aria-label={`Remove concept ${item.concept}`}
+                            title="Remove concept"
+                            className="opacity-70 group-hover:opacity-100 focus:opacity-100 h-6 w-6 inline-flex items-center justify-center rounded text-slate-400 hover:text-red-600 transition-opacity"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                    {item.note ? (
+                      <p
+                        dir="auto"
+                        className="bidi-plaintext text-xs text-slate-600 dark:text-slate-300 leading-snug"
+                      >
+                        {stripHighlightMarkup(item.note)}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
         {/* Rolling Memory Packs (P1 -> P15) + Inline Inspector */}
         <section
           aria-label="Memory packs"
           className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3"
         >
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Rolling Memory Packs
+            </h2>
+            <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+              {rollingPacks.length} / {PACK_SLOTS} slots
+            </span>
+          </div>
+
           <div className="grid grid-cols-5 gap-2">
             {Array.from({ length: PACK_SLOTS }, (_, slotIdx) => {
               const pack = rollingPacks[slotIdx];
@@ -242,21 +325,21 @@ export function MemoryPanel({
               </div>
 
               <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
-                <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-                  Packed Notes &amp; Quotes (~80% retention)
+                <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+                  Packed Study Memory (Subtopics, Conclusions, Blindspots &amp; Progress)
                 </div>
                 <p
                   dir="auto"
                   className="bidi-plaintext whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-200 leading-relaxed"
                 >
-                  <RichInlineText text={selectedPack.summary} />
+                  <RichInlineText text={stripHighlightMarkup(selectedPack.summary)} />
                 </p>
               </div>
 
               {selectedPack.bullets.length > 0 ? (
                 <div>
                   <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
-                    Highlights
+                    Key Takeaways
                   </div>
                   <ul className="space-y-2">
                     {selectedPack.bullets.map((b, i) => (
@@ -265,7 +348,7 @@ export function MemoryPanel({
                         dir="auto"
                         className="bidi-plaintext p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 leading-relaxed"
                       >
-                        <RichInlineText text={b} />
+                        <RichInlineText text={stripHighlightMarkup(b)} />
                       </li>
                     ))}
                   </ul>
@@ -273,6 +356,50 @@ export function MemoryPanel({
               ) : null}
             </div>
           ) : null}
+        </section>
+
+        {/* Active Window */}
+        <section
+          aria-label="Active window"
+          className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Active Window
+            </h2>
+            <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+              {analysis.activeWindow.length} / {ACTIVE_WINDOW_MAX_MESSAGES} msgs ·{' '}
+              {analysis.activeTokens.toLocaleString()} tok
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {analysis.activeWindow.length === 0 ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400 py-6 text-center">
+                No messages in active window yet.
+              </p>
+            ) : (
+              analysis.activeWindow.map((msg) => (
+                <div
+                  key={msg.id}
+                  className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 text-xs"
+                >
+                  <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
+                    <span className="font-semibold text-slate-700 dark:text-slate-200">
+                      {msg.role === 'user' ? 'Student' : 'Tutor'}
+                    </span>
+                    <span className="tabular-nums">{formatRelativeTime(msg.createdAt)}</span>
+                  </div>
+                  <p
+                    dir="auto"
+                    className="bidi-plaintext text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words leading-relaxed"
+                  >
+                    {msg.content}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
         </section>
       </div>
     </div>

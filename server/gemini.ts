@@ -8,7 +8,11 @@ import type {
   ThinkingLevel as TalkThinkingLevel,
   TokenUsageSnapshot,
 } from '../src/types/talk.ts';
-import { getQuoteAllowance, getTargetSummaryTokens } from '../src/utils/memoryEngine.ts';
+import {
+  getTargetSummaryTokens,
+  sanitizeMemoryPackOutput,
+  stripHighlightMarkup,
+} from '../src/utils/memoryEngine.ts';
 
 export const GEMINI_CHAT_MODEL: GeminiModel = 'gemini-4-hydrogen';
 export const GEMINI_STT_MODEL = 'gemini-3.5-transcribe';
@@ -305,9 +309,7 @@ export async function summarizeWithGemini(params: {
 }): Promise<{ summary: string; bullets: string[] }> {
   const ai = createGeminiClient();
   const model = params.model || GEMINI_CHAT_MODEL;
-  const targetTokens = getTargetSummaryTokens(params.inputTokens);
-  const quoteSharePct = Math.round(getQuoteAllowance() * 100);
-  const notesSharePct = 100 - quoteSharePct;
+  const maxTargetTokens = getTargetSummaryTokens(params.inputTokens);
 
   const sourceText =
     Array.isArray(params.packs) && params.packs.length > 0
@@ -325,13 +327,20 @@ export async function summarizeWithGemini(params: {
     model,
     contents: sourceText,
     config: {
-      systemInstruction: `You are a high-retention study-memory compactor. Pack the conversation segment into a rich episodic memory pack by removing only unnecessary conversational filler while preserving the substantive study material.
-- Target retention: keep roughly ~80% of the source length (about ~${targetTokens} tokens as a flexible ballpark — slightly more or less is fine if needed for clarity, no artificial 400-token cutoff).
-- Composition (~${quoteSharePct}% quotes / ~${notesSharePct}% description):
-  1) Verbatim Quotes (~${quoteSharePct}%): Preserve exact, important quotes from the student and tutor (key definitions, exact formulas/LaTeX, examples, subtle wording, and specific claims or questions).
-  2) Descriptive Study Notes (~${notesSharePct}%): Summarize what was discussed, what concepts were covered, where the student struggled or had misconceptions, and what was emphasized.
-  3) Textbook Image History: If any [[IMG-N]] textbook image markers appeared in the messages, retain a brief note such as "Shown [[IMG-1]]" so the tutor knows it was already displayed.
-- Put the full ~${targetTokens}-token packed notes + quotes inside "summary", and provide 3-5 short topic index bullets in "bullets" for quick visual scanning.`,
+      systemInstruction: `You are a high-signal study-memory compactor for Talk. Compress this conversation segment into a crisp, durable study memory pack that helps the tutor remember what was learned, decided, still shaky, and improved.
+
+Rules:
+1. Substance-proportional length: Use at most ~${maxTargetTokens} tokens as an upper ceiling for dense technical content—never pad to hit a length target. Strip greetings, connection tests ("can you hear me?"), and app/UI troubleshooting chatter. If the segment contains mostly small talk or UI talk, compress it into 1–3 brief sentences.
+2. Required structure inside "summary" (use concise **Section:** headings, omitting any section that genuinely has nothing substantive):
+   - **Discussed & Subtopics Covered:** Specific topics, problems, mechanisms, or questions covered (preserve exact formulas/LaTeX like $...$ and key nuances concisely).
+   - **Conclusions:** Verified answers, rules, derivations, or study decisions reached.
+   - **Blindspots:** Student misconceptions, shaky assumptions, confusing steps, or open unresolved questions.
+   - **Understanding Improvements:** Concepts the student clarified, errors they corrected, or breakthroughs demonstrated.
+   - If any [[IMG-N]] textbook figure markers were shown, add a brief line: Shown: [[IMG-1]], etc.
+3. Formatting & cleanliness:
+   - Write clean plain prose and standard Markdown bold/LaTeX ($...$) only.
+   - NEVER use Talk inline highlight delimiters (==...==, @@...@@, !!...!!, ++...++, whether raw or in backticks) anywhere in "summary" or "bullets".
+4. "bullets": Provide 2–5 short, distinct scannable takeaways (max 1 line each) covering key subtopics, conclusions, blindspots, or improvements. Do not duplicate lines verbatim from "summary". (Use 1 short bullet if the segment had minimal study content.)`,
       thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
       responseMimeType: 'application/json',
       responseSchema: {
@@ -349,12 +358,12 @@ export async function summarizeWithGemini(params: {
   });
 
   const parsed = JSON.parse((response.text ?? '{}').trim());
-  return {
-    summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : '',
+  return sanitizeMemoryPackOutput({
+    summary: typeof parsed.summary === 'string' ? parsed.summary : '',
     bullets: Array.isArray(parsed.bullets)
-      ? parsed.bullets.map((b: unknown) => String(b)).filter(Boolean)
+      ? parsed.bullets.map((b: unknown) => String(b))
       : [],
-  };
+  });
 }
 
 export async function updateLearnerStateWithGemini(params: {
@@ -372,8 +381,14 @@ export async function updateLearnerStateWithGemini(params: {
     model,
     contents: `Current state:\n${JSON.stringify(params.currentState)}\n\nNew dialogue:\n${dialogue}`,
     config: {
-      systemInstruction:
-        'Maintain the Living Learner State (max 24 concepts). Statuses allowed: "misunderstood", "unresolved", "shaky", "understood". Update, promote, or add concepts based on the recent dialogue. Each note must be 1 concise line.',
+      systemInstruction: `Maintain the student's Living Learner State (max 24 concepts). Statuses allowed: "misunderstood", "unresolved", "shaky", "understood".
+
+Rules:
+1. Track Blindspots ("misunderstood", "unresolved", "shaky") with a 1-line diagnosis of what is confused, incomplete, or still open.
+2. Track Understanding Improvements ("understood"): add mastered concepts and promote prior blindspots when the new dialogue shows the student corrected a mistake or reasoned accurately—prefixing the note with "Improved:" when an earlier gap was resolved (e.g., "Improved: correctly distinguished Keq from reaction quotient Q").
+3. Carry forward existing unaffected concepts from Current state so prior progress and open blindspots are never lost.
+4. Ignore casual greetings, connection checks, and app/UI troubleshooting—never create concepts for UI issues or meta chat.
+5. Never use inline highlight delimiters (==, @@, !!, ++) in concept names or notes. Each note must be 1 concise, informative line.`,
       thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
       responseMimeType: 'application/json',
       responseSchema: {
@@ -405,13 +420,14 @@ export async function updateLearnerStateWithGemini(params: {
     .slice(0, 24)
     .map((item: Record<string, unknown>, idx: number) => ({
       id: `cs_${now}_${idx}`,
-      concept: String(item.concept),
+      concept: stripHighlightMarkup(String(item.concept)).trim(),
       status: ['misunderstood', 'unresolved', 'shaky', 'understood'].includes(String(item.status))
         ? (item.status as ConceptState['status'])
         : 'unresolved',
-      note: String(item.note || ''),
+      note: stripHighlightMarkup(String(item.note || '')).trim(),
       updatedAt: now,
-    }));
+    }))
+    .filter((item: ConceptState) => item.concept.length > 0);
 }
 
 export async function transcribeWithGemini(

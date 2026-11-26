@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Download, Monitor, Moon, RotateCcw, Sun, Upload, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { LogIn, LogOut, Monitor, Moon, Sun, X } from 'lucide-react';
 import type { GeminiModel, ThemeMode, ThinkingLevel } from '../types/talk';
 
 interface SettingsModalProps {
@@ -7,10 +7,12 @@ interface SettingsModalProps {
   currentTheme: ThemeMode;
   currentGeminiModel: GeminiModel;
   currentThinkingLevel: ThinkingLevel;
+  isFirebaseConnected: boolean;
+  userDisplayName?: string | null;
+  userEmail?: string | null;
+  onSignInWithGoogle: () => Promise<void>;
+  onSignOut: () => Promise<void>;
   onSave: (theme: ThemeMode, geminiModel: GeminiModel) => void;
-  onExportBackup: () => Promise<void>;
-  onImportBackup: (file: File) => Promise<void>;
-  onResetWorkspace: () => Promise<void>;
   onClose: () => void;
 }
 
@@ -47,24 +49,21 @@ export function SettingsModal({
   currentTheme,
   currentGeminiModel,
   currentThinkingLevel,
+  isFirebaseConnected,
+  userDisplayName,
+  userEmail,
+  onSignInWithGoogle,
+  onSignOut,
   onSave,
-  onExportBackup,
-  onImportBackup,
-  onResetWorkspace,
   onClose,
 }: SettingsModalProps) {
   const [draftTheme, setDraftTheme] = useState<ThemeMode>(currentTheme);
   const [draftGeminiModel, setDraftGeminiModel] = useState<GeminiModel>(currentGeminiModel);
-  const [confirmingReset, setConfirmingReset] = useState(false);
-  const [dataStatus, setDataStatus] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setDraftTheme(currentTheme);
       setDraftGeminiModel(currentGeminiModel);
-      setConfirmingReset(false);
-      setDataStatus(null);
     }
   }, [isOpen, currentTheme, currentGeminiModel]);
 
@@ -195,100 +194,45 @@ export function SettingsModal({
           </div>
 
           <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
-                Local Data &amp; Backup
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                  {isFirebaseConnected ? 'Firebase Firestore Sync' : 'Local Browser Mode'}
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  {isFirebaseConnected
+                    ? userEmail || userDisplayName || 'Signed in with Google'
+                    : 'Sign in with Google to sync chats and study data in Firestore.'}
+                </p>
               </div>
-              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                Saved in browser
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-              Chats, notes, textbooks, questions, and memory are stored locally in this browser so they persist across reloads and server restarts.
-            </p>
-            <input
-              ref={importInputRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (!file) return;
-                try {
-                  await onImportBackup(file);
-                  setConfirmingReset(false);
-                  setDataStatus({ kind: 'ok', text: 'Backup restored into browser storage.' });
-                } catch (err) {
-                  setDataStatus({
-                    kind: 'err',
-                    text: (err as Error).message || 'Could not import backup file.',
-                  });
-                }
-              }}
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await onExportBackup();
-                    setDataStatus({ kind: 'ok', text: 'Backup downloaded.' });
-                  } catch (err) {
-                    setDataStatus({
-                      kind: 'err',
-                      text: (err as Error).message || 'Failed to export backup.',
-                    });
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Export JSON
-              </button>
-              <button
-                type="button"
-                onClick={() => importInputRef.current?.click()}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                Import JSON
-              </button>
-              {confirmingReset ? (
+              {isFirebaseConnected ? (
                 <button
                   type="button"
                   onClick={async () => {
-                    await onResetWorkspace();
-                    setConfirmingReset(false);
-                    setDataStatus({ kind: 'ok', text: 'Workspace reset to default samples.' });
+                    onClose();
+                    await onSignOut();
                   }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-xs font-medium text-white transition-colors"
+                  className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                 >
-                  Confirm reset
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign out</span>
                 </button>
               ) : (
                 <button
                   type="button"
-                  onClick={() => setConfirmingReset(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 text-xs font-medium text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                  onClick={async () => {
+                    onClose();
+                    await onSignInWithGoogle();
+                  }}
+                  className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-xs font-medium text-white transition-colors"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  Reset default
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Sign in</span>
                 </button>
               )}
             </div>
-            {dataStatus && (
-              <p
-                className={`mt-2 text-xs ${
-                  dataStatus.kind === 'ok'
-                    ? 'text-emerald-700 dark:text-emerald-400'
-                    : 'text-rose-600 dark:text-rose-400'
-                }`}
-              >
-                {dataStatus.text}
-              </p>
-            )}
           </div>
+
         </div>
 
         <div className="px-5 py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 flex items-center justify-end gap-2">

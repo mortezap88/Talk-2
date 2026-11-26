@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { talkApi } from './api/talkClient';
+import { AuthGate } from './components/AuthGate';
 import { ChatManagerDrawer } from './components/ChatManagerDrawer';
 import { ChatTab } from './components/ChatTab';
 import { MemoryPanel } from './components/MemoryPanel';
@@ -9,6 +10,8 @@ import { RightPanelSwitcher } from './components/RightPanelSwitcher';
 import { SettingsModal } from './components/SettingsModal';
 import { TextbookTab } from './components/TextbookTab';
 import { WorkspaceRail } from './components/WorkspaceRail';
+import { useFirebaseAuth } from './firebase/AuthContext';
+import { firestoreWorkspaceStore } from './firebase/firestoreStore';
 import type {
   AppSettings,
   ChatAttachment,
@@ -26,7 +29,7 @@ import type {
   ThemeMode,
   ThinkingLevel,
 } from './types/talk';
-import { createId, normalizeThinkingLevelForModel } from './utils/formatters';
+import { createId, dedupeById, normalizeThinkingLevelForModel } from './utils/formatters';
 import { processSelectedFiles } from './utils/fileAttachments';
 import {
   analyzeActiveWindow,
@@ -36,8 +39,10 @@ import {
   estimateMessageTokens,
   estimateTokens,
   insertRollingPack,
+  mergeLearnerState,
   needsCompaction,
   PACK_SLOTS,
+  sanitizeMemoryPackOutput,
   selectCompactionChunk,
 } from './utils/memoryEngine';
 import { parseChatIntent, parseQaSuggestions, type ParsedQaSuggestion } from './utils/qaParser';
@@ -58,6 +63,17 @@ function applyThemeClass(mode: ThemeMode): void {
 }
 
 export default function App() {
+  const {
+    user,
+    isAuthReady,
+    isSigningIn,
+    authError,
+    localMode,
+    signInWithGoogle,
+    signOutUser,
+    enterLocalMode,
+  } = useFirebaseAuth();
+
   const [chats, setChats] = useState<ChatItem[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ModeTab>('textbook');
@@ -137,34 +153,31 @@ export default function App() {
     }));
   }, []);
 
-  const reloadWorkspaceFromStore = useCallback(async () => {
-    const [loadedChats, loadedSettings] = await Promise.all([
-      talkApi.listChats(),
-      talkApi.getSettings(),
-    ]);
-    setSettings(loadedSettings);
+
+  // Load workspace once auth state is ready and user is either signed in or in local mode
+  useEffect(() => {
+    if (!isAuthReady) return;
+    if (!user && !localMode) {
+      setChats([]);
+      setActiveChatId(null);
+      setNotesByChat({});
+      setQuestionsByChat({});
+      setMemoryByChat({});
+      setCardsByChat({});
+      setTextbooksByChat({});
+      setIsLoading(false);
+      return;
+    }
+
+    let mounted = true;
+    setIsLoading(true);
+    setErrorBanner(null);
     setNotesByChat({});
     setQuestionsByChat({});
     setMemoryByChat({});
     setCardsByChat({});
     setTextbooksByChat({});
-    setDraftByChat({});
-    setAttachmentsByChat({});
-    if (loadedChats.length > 0) {
-      setChats(loadedChats);
-      setActiveChatId(loadedChats[0].id);
-      await loadChatContextData(loadedChats[0].id);
-    } else {
-      const fresh = await talkApi.createChat('New study chat');
-      setChats([fresh]);
-      setActiveChatId(fresh.id);
-      await loadChatContextData(fresh.id);
-    }
-  }, [loadChatContextData]);
 
-  // Initial load
-  useEffect(() => {
-    let mounted = true;
     (async () => {
       try {
         const [loadedChats, loadedSettings] = await Promise.all([
@@ -174,7 +187,7 @@ export default function App() {
         if (!mounted) return;
         setSettings(loadedSettings);
         if (loadedChats.length > 0) {
-          setChats(loadedChats);
+          setChats(dedupeById(loadedChats));
           setActiveChatId(loadedChats[0].id);
           await loadChatContextData(loadedChats[0].id);
         } else {
@@ -186,16 +199,71 @@ export default function App() {
         }
       } catch (err) {
         if (mounted) {
-          setErrorBanner((err as Error).message || 'Failed to load workspace from local storage.');
+          setErrorBanner(
+            (err as Error).message ||
+              (user ? 'Failed to load workspace from Firebase Firestore.' : 'Failed to load workspace.')
+          );
         }
       } finally {
         if (mounted) setIsLoading(false);
       }
     })();
+
     return () => {
       mounted = false;
     };
-  }, [loadChatContextData]);
+  }, [isAuthReady, user?.uid, localMode, loadChatContextData]);
+
+  // Real-time Firestore listeners (strictly attached only when authenticated)
+  useEffect(() => {
+    if (!isAuthReady || !user) return;
+    const uid = user.uid;
+    const unsubscribeChats = firestoreWorkspaceStore.subscribeChatsMetadata(uid, (metaList) => {
+      setChats((prev) => {
+        const prevMap = new Map(prev.map((c) => [c.id, c]));
+        return dedupeById(
+          metaList.map((meta) => {
+            const existing = prevMap.get(meta.id);
+            return {
+              id: meta.id,
+              title: meta.title,
+              updatedAt: meta.updatedAt,
+              messages: existing ? dedupeById(existing.messages) : [],
+            };
+          })
+        );
+      });
+    });
+
+    return () => {
+      unsubscribeChats();
+    };
+  }, [isAuthReady, user]);
+
+  useEffect(() => {
+    if (!isAuthReady || !user || !activeChatId) return;
+    const uid = user.uid;
+    const chatId = activeChatId;
+    const unsubscribeMessages = firestoreWorkspaceStore.subscribeChatMessages(
+      uid,
+      chatId,
+      (remoteMessages) => {
+        setChats((prev) =>
+          prev.map((c) => {
+            if (c.id !== chatId) return c;
+            if (remoteMessages.length < c.messages.length && activeRequestIdRef.current) {
+              return c;
+            }
+            return { ...c, messages: dedupeById(remoteMessages) };
+          })
+        );
+      }
+    );
+
+    return () => {
+      unsubscribeMessages();
+    };
+  }, [isAuthReady, user, activeChatId]);
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
   const activeNote = (activeChatId && notesByChat[activeChatId]) || EMPTY_NOTE;
@@ -225,7 +293,7 @@ export default function App() {
   const handleCreateChat = async () => {
     try {
       const created = await talkApi.createChat(`Study Session ${chats.length + 1}`);
-      setChats((prev) => [created, ...prev]);
+      setChats((prev) => dedupeById([created, ...prev]));
       setActiveChatId(created.id);
       setMobilePane('chat');
       await loadChatContextData(created.id);
@@ -238,7 +306,7 @@ export default function App() {
   const handleRenameChat = async (chatId: string, newTitle: string) => {
     try {
       const updated = await talkApi.updateChat(chatId, { title: newTitle });
-      setChats((prev) => prev.map((c) => (c.id === chatId ? updated : c)));
+      setChats((prev) => dedupeById(prev.map((c) => (c.id === chatId ? updated : c))));
     } catch (err) {
       setErrorBanner((err as Error).message);
     }
@@ -290,7 +358,7 @@ export default function App() {
         setActiveChatId(fresh.id);
         await loadChatContextData(fresh.id);
       } else {
-        setChats(remaining);
+        setChats((prev) => prev.filter((c) => c.id !== chatId));
         if (activeChatId === chatId) {
           setActiveChatId(remaining[0].id);
           await loadChatContextData(remaining[0].id);
@@ -452,11 +520,22 @@ export default function App() {
 
         const inputTokens = toCompact.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
 
-        const summaryRes = await talkApi.summarizeMemory({
-          stage: 1,
-          inputTokens,
-          messages: toCompact,
-        });
+        const [summaryRes, learnerSettled] = await Promise.all([
+          talkApi.summarizeMemory({
+            stage: 1,
+            inputTokens,
+            messages: toCompact,
+          }),
+          talkApi
+            .updateLearnerState({
+              currentState: latestMem.learnerState,
+              messages: toCompact,
+            })
+            .then(
+              (value) => ({ ok: true as const, value }),
+              () => ({ ok: false as const })
+            ),
+        ]);
 
         const afterMem = memoryRef.current[chatId] || latestMem;
         if (afterMem.epoch !== startEpoch) {
@@ -464,26 +543,30 @@ export default function App() {
         }
 
         const now = Date.now();
+        const cleanedPack = sanitizeMemoryPackOutput(summaryRes);
         const newPack: MemoryPack = {
           id: createId('pack_s1'),
           stage: 1,
-          summary: summaryRes.summary,
-          bullets: summaryRes.bullets,
-          tokenCount: estimateTokens(summaryRes.summary),
+          summary: cleanedPack.summary,
+          bullets: cleanedPack.bullets,
+          tokenCount: estimateTokens(cleanedPack.summary),
           sourceRange: [afterMem.compactedCount, afterMem.compactedCount + toCompact.length],
           createdAt: now,
         };
 
         const packs = insertRollingPack(afterMem.packs, newPack, PACK_SLOTS);
+        const nextLearnerState = learnerSettled.ok
+          ? mergeLearnerState(afterMem.learnerState, learnerSettled.value.concepts, now)
+          : mergeLearnerState(afterMem.learnerState, [], now);
 
         const updatedMemory: ChatMemory = {
           version: 2,
           compactedCount: afterMem.compactedCount + toCompact.length,
           compactedTokens: afterMem.compactedTokens + inputTokens,
           epoch: afterMem.epoch,
-          learnerState: [],
+          learnerState: nextLearnerState,
           packs,
-          updatedAt: Date.now(),
+          updatedAt: now,
           lastError: undefined,
         };
 
@@ -502,6 +585,7 @@ export default function App() {
         lastError: (err as Error).message || 'Memory compaction failed',
         updatedAt: Date.now(),
       };
+      memoryRef.current = { ...memoryRef.current, [chatId]: erroredMemory };
       setMemoryByChat((prev) => ({ ...prev, [chatId]: erroredMemory }));
       await talkApi.kvSet(`memory:${chatId}`, erroredMemory).catch(() => {});
     } finally {
@@ -511,13 +595,28 @@ export default function App() {
 
   const handleDeletePack = async (packId: string) => {
     if (!activeChatId) return;
-    const current = memoryByChat[activeChatId] || createEmptyMemory();
+    const current = memoryRef.current[activeChatId] || memoryByChat[activeChatId] || createEmptyMemory();
     const updated: ChatMemory = {
       ...current,
       epoch: current.epoch + 1,
       packs: current.packs.filter((p) => p.id !== packId),
       updatedAt: Date.now(),
     };
+    memoryRef.current = { ...memoryRef.current, [activeChatId]: updated };
+    setMemoryByChat((prev) => ({ ...prev, [activeChatId]: updated }));
+    await talkApi.kvSet(`memory:${activeChatId}`, updated);
+  };
+
+  const handleRemoveConcept = async (conceptId: string) => {
+    if (!activeChatId) return;
+    const current = memoryRef.current[activeChatId] || memoryByChat[activeChatId] || createEmptyMemory();
+    const updated: ChatMemory = {
+      ...current,
+      epoch: current.epoch + 1,
+      learnerState: current.learnerState.filter((c) => c.id !== conceptId),
+      updatedAt: Date.now(),
+    };
+    memoryRef.current = { ...memoryRef.current, [activeChatId]: updated };
     setMemoryByChat((prev) => ({ ...prev, [activeChatId]: updated }));
     await talkApi.kvSet(`memory:${activeChatId}`, updated);
   };
@@ -805,6 +904,25 @@ export default function App() {
     window.addEventListener('pointerup', onPointerUp);
   };
 
+  if (!isAuthReady) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-sm text-slate-500 dark:text-slate-400">
+        Connecting to study workspace…
+      </div>
+    );
+  }
+
+  if (!user && !localMode) {
+    return (
+      <AuthGate
+        isSigningIn={isSigningIn}
+        authError={authError}
+        onSignInWithGoogle={signInWithGoogle}
+        onContinueLocal={enterLocalMode}
+      />
+    );
+  }
+
   return (
     <div className="h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden">
       <div className="relative flex-1 min-h-0 flex">
@@ -813,6 +931,11 @@ export default function App() {
           activeChatId={activeChatId}
           isOpen={isDrawerOpen}
           isPinned={isDrawerPinned}
+          isFirebaseConnected={Boolean(user)}
+          userDisplayName={user?.displayName}
+          userEmail={user?.email}
+          onSignInWithGoogle={signInWithGoogle}
+          onSignOut={signOutUser}
           onCloseDrawer={() => setIsDrawerOpen(false)}
           onTogglePin={() => {
             setIsDrawerPinned((p) => {
@@ -998,10 +1121,12 @@ export default function App() {
                       key={`memory_${activeChat.id}`}
                       memory={activeMemory}
                       messages={activeChat.messages}
+                      mode={rightPanelMode}
                       isCompacting={Boolean(activeChatId && compactingChatId === activeChatId)}
                       onCompactNow={() => {
                         void runMemoryCompaction(activeChat.id, activeChat.messages, true);
                       }}
+                      onRemoveConcept={handleRemoveConcept}
                       onDeletePack={handleDeletePack}
                     />
                   )}
@@ -1017,31 +1142,12 @@ export default function App() {
         currentTheme={settings.themeMode}
         currentGeminiModel={settings.geminiModel}
         currentThinkingLevel={settings.thinkingLevel}
+        isFirebaseConnected={Boolean(user)}
+        userDisplayName={user?.displayName}
+        userEmail={user?.email}
+        onSignInWithGoogle={signInWithGoogle}
+        onSignOut={signOutUser}
         onSave={handleSaveSettings}
-        onExportBackup={async () => {
-          const snapshot = await talkApi.exportWorkspace();
-          const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
-            type: 'application/json',
-          });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `talk-backup-${new Date().toISOString().slice(0, 10)}.json`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(url);
-        }}
-        onImportBackup={async (file) => {
-          const text = await file.text();
-          const parsed = JSON.parse(text);
-          await talkApi.importWorkspace(parsed);
-          await reloadWorkspaceFromStore();
-        }}
-        onResetWorkspace={async () => {
-          await talkApi.resetWorkspace();
-          await reloadWorkspaceFromStore();
-        }}
         onClose={() => setIsSettingsOpen(false)}
       />
     </div>

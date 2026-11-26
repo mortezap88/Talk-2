@@ -82,7 +82,7 @@ export function NotesTab({ chatId, note, mode = 'edit', onSaveNote }: NotesTabPr
 
   if (mode === 'read') {
     return (
-      <div className="flex-1 min-h-0 overflow-y-auto bg-white dark:bg-slate-900 px-5 sm:px-7 pt-14 pb-8">
+      <div className="doc-scroll flex-1 min-h-0 overflow-y-auto bg-white dark:bg-slate-900 px-5 sm:px-7 pt-14 pb-8">
         <div className="w-full space-y-4">
           {saveFailed ? (
             <div
@@ -109,7 +109,7 @@ export function NotesTab({ chatId, note, mode = 'edit', onSaveNote }: NotesTabPr
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto bg-slate-50 dark:bg-slate-950 px-4 sm:px-5 pt-14 pb-5">
+    <div className="doc-scroll flex-1 min-h-0 overflow-y-auto bg-slate-50 dark:bg-slate-950 px-4 sm:px-5 pt-14 pb-5">
       <div className="max-w-4xl mx-auto space-y-4">
         {saveFailed ? (
           <div

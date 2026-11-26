@@ -13,7 +13,6 @@ import {
   Gauge,
   Loader2,
   Mic,
-  MicOff,
   Square,
   X,
 } from 'lucide-react';
@@ -124,6 +123,18 @@ export function ChatTab({
   latestInputRef.current = input;
   const onChangeInputRef = useRef(onChangeInput);
   onChangeInputRef.current = onChangeInput;
+  const isStreamingRef = useRef(isStreaming);
+  isStreamingRef.current = isStreaming;
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  const webSearchArmedRef = useRef(webSearchArmed);
+  webSearchArmedRef.current = webSearchArmed;
+  const onSendMessageRef = useRef(onSendMessage);
+  onSendMessageRef.current = onSendMessage;
+  const onClearAttachmentsRef = useRef(onClearAttachments);
+  onClearAttachmentsRef.current = onClearAttachments;
+  const onClearWebSearchRef = useRef(onClearWebSearch);
+  onClearWebSearchRef.current = onClearWebSearch;
 
   // Auto-focus composer and clean up any active voice recording when switching chats
   useEffect(() => {
@@ -146,8 +157,8 @@ export function ChatTab({
     const el = textareaRef.current;
     if (!el) return;
     const borderHeight = el.offsetHeight - el.clientHeight;
-    el.style.height = '36px';
-    const { heightPx, overflowY } = computeComposerLayout(el.scrollHeight, borderHeight);
+    el.style.height = '32px';
+    const { heightPx, overflowY } = computeComposerLayout(el.scrollHeight, borderHeight, 32, 180);
     el.style.height = `${heightPx}px`;
     el.style.overflowY = overflowY;
   }, [input, chatId]);
@@ -255,18 +266,58 @@ export function ChatTab({
       let anyTranscriptEmitted = false;
       let recordingEnded = false;
 
+      const focusComposerAtEnd = () => {
+        requestAnimationFrame(() => {
+          const el = textareaRef.current;
+          if (!el) return;
+          el.focus();
+          const len = el.value.length;
+          el.setSelectionRange(len, len);
+        });
+      };
+
       const flushOrdered = () => {
+        // Hold delivering transcript chunks into the input box until the user stops recording,
+        // so background chunks never shift the text while they are still speaking or editing.
+        if (!recordingEnded) return;
+        let appended = false;
         while (results.has(nextFlushSeq)) {
           const text = (results.get(nextFlushSeq) || '').trim();
           results.delete(nextFlushSeq);
           nextFlushSeq++;
           if (text && sessionId === voiceSessionCounterRef.current) {
             anyTranscriptEmitted = true;
+            appended = true;
             const cur = latestInputRef.current;
             const nextVal = cur.trim() ? `${cur.trimEnd()} ${text}` : text;
             latestInputRef.current = nextVal;
             onChangeInputRef.current(nextVal);
           }
+        }
+        if (appended) {
+          focusComposerAtEnd();
+        }
+      };
+
+      const finishVoiceSession = () => {
+        flushOrdered();
+        setIsTranscribing(false);
+        if (!anyTranscriptEmitted) {
+          setMicError((prev) => prev || 'No speech was detected in the recording.');
+          focusComposerAtEnd();
+          return;
+        }
+        const finalText = latestInputRef.current.trim();
+        if (finalText && !isStreamingRef.current) {
+          const atts = [...attachmentsRef.current];
+          const useSearch = webSearchArmedRef.current;
+          latestInputRef.current = '';
+          onChangeInputRef.current('');
+          onClearAttachmentsRef.current();
+          onClearWebSearchRef.current();
+          void onSendMessageRef.current(finalText, atts, useSearch);
+        } else {
+          focusComposerAtEnd();
         }
       };
 
@@ -294,11 +345,7 @@ export function ChatTab({
               pendingTranscriptionsRef.current - 1
             );
             if (recordingEnded && pendingTranscriptionsRef.current === 0) {
-              setIsTranscribing(false);
-              if (!anyTranscriptEmitted) {
-                setMicError((prev) => prev || 'No speech was detected in the recording.');
-              }
-              textareaRef.current?.focus();
+              finishVoiceSession();
             }
           });
       };
@@ -332,21 +379,19 @@ export function ChatTab({
           // ignore disconnect errors
         }
         stream.getTracks().forEach((t) => t.stop());
+
+        if (!abort && sessionId === voiceSessionCounterRef.current) {
+          chunker.flush();
+          flushOrdered();
+          if (pendingTranscriptionsRef.current > 0) {
+            setIsTranscribing(true);
+          } else {
+            finishVoiceSession();
+          }
+        }
+
         if (audioCtx.state !== 'closed') {
           await audioCtx.close().catch(() => {});
-        }
-        if (abort || sessionId !== voiceSessionCounterRef.current) {
-          return;
-        }
-        chunker.flush();
-        if (pendingTranscriptionsRef.current > 0) {
-          setIsTranscribing(true);
-        } else {
-          setIsTranscribing(false);
-          if (!anyTranscriptEmitted) {
-            setMicError((prev) => prev || 'No speech was detected in the recording.');
-          }
-          textareaRef.current?.focus();
         }
       };
 
@@ -544,10 +589,10 @@ export function ChatTab({
   const usagePct = Math.min(100, (displayTotalTokens / GEMINI_CONTEXT_WINDOW_TOKENS) * 100);
   const tokenPressureClass =
     usagePct >= 85
-      ? 'border-rose-300 dark:border-rose-700 bg-rose-50/80 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100/80 dark:hover:bg-rose-950/60'
+      ? 'border-rose-300 dark:border-rose-700 bg-rose-50/95 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 hover:bg-rose-100/95 dark:hover:bg-rose-950'
       : usagePct >= 60
-      ? 'border-amber-300 dark:border-amber-700 bg-amber-50/80 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100/80 dark:hover:bg-amber-950/60'
-      : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white';
+      ? 'border-amber-300 dark:border-amber-700 bg-amber-50/95 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 hover:bg-amber-100/95 dark:hover:bg-amber-950'
+      : 'border-[#e2e8f0] dark:border-slate-700/80 bg-white/95 dark:bg-slate-900/95 text-[#64748b] dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:border-slate-300 dark:hover:border-slate-600';
 
   const handleOpenTextbookImage = (entry: TextbookImageEntry) => {
     if (!entry.image.dataUrl) return;
@@ -595,7 +640,11 @@ export function ChatTab({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-y-auto pl-16 pr-4 sm:pr-6 lg:pr-8 pt-6 pb-6"
+        className={`chat-scroll flex-1 min-h-0 overflow-y-auto pl-16 pr-4 sm:pr-6 lg:pr-8 pt-6 ${
+          isSearchingWeb || webSearchArmed || micError || attachments.length > 0
+            ? 'pb-32'
+            : 'pb-[84px]'
+        }`}
       >
         <div className="max-w-[78rem] mx-auto">
           {messages.length === 0 && streamingText === null ? (
@@ -777,7 +826,7 @@ export function ChatTab({
           type="button"
           onClick={() => scrollToBottom('smooth')}
           aria-label="Jump to bottom"
-          className="absolute bottom-16 right-6 z-20 h-9 px-3 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-md text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center gap-1.5 hover:bg-slate-50 dark:hover:bg-slate-800"
+          className="absolute bottom-20 right-6 z-20 h-9 px-3 rounded-full border border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md shadow-md text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center gap-1.5 hover:bg-slate-50 dark:hover:bg-slate-800"
         >
           <ArrowDown className="w-3.5 h-3.5" />
           <span>Jump to bottom</span>
@@ -793,266 +842,266 @@ export function ChatTab({
         </div>
       ) : null}
 
-      {/* Optional hints & attachment thumbnails above the single-row bottom bar */}
-      {isSearchingWeb || webSearchArmed || micError || attachments.length > 0 ? (
-        <div className="shrink-0 border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 px-4 sm:px-6 py-2 space-y-2">
-          {isSearchingWeb ? (
-            <div className="flex items-center gap-2 text-xs text-sky-700 dark:text-sky-300 font-medium">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              <span>Searching the web with Tavily before sending…</span>
-            </div>
-          ) : webSearchArmed ? (
-            <div className="text-xs text-sky-700 dark:text-sky-300 font-medium">
-              Web search enabled — next message will include live Tavily results.
-            </div>
-          ) : null}
-
-          {micError ? (
-            <div className="text-xs text-red-600 dark:text-red-400">{micError}</div>
-          ) : null}
-
-          {attachments.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {attachments.map((att) => (
-                <div
-                  key={att.id}
-                  className="relative group rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800"
-                >
-                  {att.dataUrl ? (
-                    <img
-                      src={att.dataUrl}
-                      alt={att.name}
-                      referrerPolicy="no-referrer"
-                      className="h-14 w-20 object-cover"
-                    />
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => onRemoveAttachment(att.id)}
-                    aria-label={`Remove ${att.name}`}
-                    className="absolute top-1 right-1 h-5 w-5 rounded-full bg-slate-900/75 text-white inline-flex items-center justify-center hover:bg-slate-900"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* Single-row bottom bar: Token counter box (left) + auto-growing textbox + Mic button (right) */}
-      <footer className="shrink-0 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 sm:px-4 py-2 flex items-end gap-2 select-none">
-        {/* Left: Separate AI Studio-style Token Counter Box */}
-        <div ref={tokenPopoverRef} className="relative shrink-0">
-          {isTokenPopoverOpen ? (
-            <div
-              role="dialog"
-              aria-label="Next request token breakdown"
-              className="absolute bottom-full left-0 mb-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-xl p-3.5 text-xs space-y-2.5 z-40"
-            >
-              <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
-                <span className="font-semibold text-slate-900 dark:text-slate-100">
-                  Next Message Token Load
-                </span>
-                <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                  {isSyncingTokens
-                    ? 'Syncing…'
-                    : isExactCount
-                    ? 'Exact Gemini count'
-                    : 'Live estimate'}
-                </span>
+      {/* Floating Prompt Bar (Token Counter + Textbox with Inner Mic Button) */}
+      <footer className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 px-4 pt-2 pb-[14px] flex flex-col gap-2 select-none">
+        {isSearchingWeb || webSearchArmed || micError || attachments.length > 0 ? (
+          <div className="pointer-events-auto rounded-xl border border-[#e2e8f0] dark:border-slate-700/80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md shadow-[0_4px_14px_rgba(15,23,42,0.06)] px-3 py-2 space-y-2">
+            {isSearchingWeb ? (
+              <div className="flex items-center gap-2 text-xs text-sky-700 dark:text-sky-300 font-medium">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Searching the web with Tavily before sending…</span>
               </div>
+            ) : webSearchArmed ? (
+              <div className="text-xs text-sky-700 dark:text-sky-300 font-medium">
+                Web search enabled — next message will include live Tavily results.
+              </div>
+            ) : null}
 
-              <div className="space-y-1.5 text-slate-600 dark:text-slate-300 tabular-nums">
-                <div className="flex items-center justify-between gap-2">
-                  <span>System Prompt</span>
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
-                    {tokenBreakdown.systemAndLearnerTokens.toLocaleString()}
+            {micError ? (
+              <div className="text-xs text-red-600 dark:text-red-400">{micError}</div>
+            ) : null}
+
+            {attachments.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {attachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="relative group rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800"
+                  >
+                    {att.dataUrl ? (
+                      <img
+                        src={att.dataUrl}
+                        alt={att.name}
+                        referrerPolicy="no-referrer"
+                        className="h-14 w-20 object-cover"
+                      />
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => onRemoveAttachment(att.id)}
+                      aria-label={`Remove ${att.name}`}
+                      className="absolute top-1 right-1 h-5 w-5 rounded-full bg-slate-900/75 text-white inline-flex items-center justify-center hover:bg-slate-900"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="flex items-end gap-[10px]">
+          {/* Token Counter Pill */}
+          <div ref={tokenPopoverRef} className="relative shrink-0">
+            {isTokenPopoverOpen ? (
+              <div
+                role="dialog"
+                aria-label="Next request token breakdown"
+                className="pointer-events-auto absolute bottom-full left-0 mb-2.5 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-xl p-3.5 text-xs space-y-2.5 z-40"
+              >
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
+                  <span className="font-semibold text-slate-900 dark:text-slate-100">
+                    Next Message Token Load
+                  </span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {isSyncingTokens
+                      ? 'Syncing…'
+                      : isExactCount
+                      ? 'Exact Gemini count'
+                      : 'Live estimate'}
                   </span>
                 </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span>Memory Packs ({tokenBreakdown.packCount})</span>
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
-                    {tokenBreakdown.memoryPacksTokens.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span>
-                    Active Chat ({tokenBreakdown.historyMessageCount} msgs
-                    {tokenBreakdown.historyImageCount > 0
-                      ? `, ${tokenBreakdown.historyImageCount} img`
-                      : ''}
-                    )
-                  </span>
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
-                    {tokenBreakdown.historyMessagesTokens.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span>Notes</span>
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
-                    {tokenBreakdown.notesTokens.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span>
-                    Textbook (text
-                    {tokenBreakdown.textbookImageCount > 0
-                      ? ` + ${tokenBreakdown.textbookImageCount} img`
-                      : ''}
-                    )
-                  </span>
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
-                    {(
-                      tokenBreakdown.textbookTextTokens +
-                      tokenBreakdown.textbookImagesTokens
-                    ).toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span>Saved Questions ({tokenBreakdown.questionCount})</span>
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
-                    {tokenBreakdown.questionsTokens.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span>
-                    Current Draft
-                    {tokenBreakdown.draftImageCount > 0
-                      ? ` (+ ${tokenBreakdown.draftImageCount} img)`
-                      : ''}
-                  </span>
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
-                    {effectiveDraftTokens.toLocaleString()}
-                  </span>
-                </div>
-                {lastReplyUsage ? (
-                  <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
-                    <span>Last Reply Actual</span>
-                    <span>
-                      Output {lastReplyUsage.outputTokens.toLocaleString()} · Thinking{' '}
-                      {lastReplyUsage.thinkingTokens.toLocaleString()}
+
+                <div className="space-y-1.5 text-slate-600 dark:text-slate-300 tabular-nums">
+                  <div className="flex items-center justify-between gap-2">
+                    <span>System Prompt</span>
+                    <span className="font-medium text-slate-900 dark:text-slate-100">
+                      {tokenBreakdown.systemAndLearnerTokens.toLocaleString()}
                     </span>
                   </div>
-                ) : null}
-                {webSearchArmed ? (
-                  <div className="text-[11px] text-sky-700 dark:text-sky-300">
-                    + Live Tavily web search results will be added on send
+                  <div className="flex items-center justify-between gap-2">
+                    <span>Memory Packs ({tokenBreakdown.packCount})</span>
+                    <span className="font-medium text-slate-900 dark:text-slate-100">
+                      {tokenBreakdown.memoryPacksTokens.toLocaleString()}
+                    </span>
                   </div>
-                ) : null}
-              </div>
-
-              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-1.5">
-                <div className="flex items-center justify-between gap-2 font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
-                  <span>Total Pressure</span>
-                  <span>
-                    {displayTotalTokens.toLocaleString()} /{' '}
-                    {GEMINI_CONTEXT_WINDOW_TOKENS.toLocaleString()} ({usagePct.toFixed(1)}%)
-                  </span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span>
+                      Active Chat ({tokenBreakdown.historyMessageCount} msgs
+                      {tokenBreakdown.historyImageCount > 0
+                        ? `, ${tokenBreakdown.historyImageCount} img`
+                        : ''}
+                      )
+                    </span>
+                    <span className="font-medium text-slate-900 dark:text-slate-100">
+                      {tokenBreakdown.historyMessagesTokens.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span>Notes</span>
+                    <span className="font-medium text-slate-900 dark:text-slate-100">
+                      {tokenBreakdown.notesTokens.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span>
+                      Textbook (text
+                      {tokenBreakdown.textbookImageCount > 0
+                        ? ` + ${tokenBreakdown.textbookImageCount} img`
+                        : ''}
+                      )
+                    </span>
+                    <span className="font-medium text-slate-900 dark:text-slate-100">
+                      {(
+                        tokenBreakdown.textbookTextTokens +
+                        tokenBreakdown.textbookImagesTokens
+                      ).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span>Saved Questions ({tokenBreakdown.questionCount})</span>
+                    <span className="font-medium text-slate-900 dark:text-slate-100">
+                      {tokenBreakdown.questionsTokens.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span>
+                      Current Draft
+                      {tokenBreakdown.draftImageCount > 0
+                        ? ` (+ ${tokenBreakdown.draftImageCount} img)`
+                        : ''}
+                    </span>
+                    <span className="font-medium text-slate-900 dark:text-slate-100">
+                      {effectiveDraftTokens.toLocaleString()}
+                    </span>
+                  </div>
+                  {lastReplyUsage ? (
+                    <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                      <span>Last Reply Actual</span>
+                      <span>
+                        Output {lastReplyUsage.outputTokens.toLocaleString()} · Thinking{' '}
+                        {lastReplyUsage.thinkingTokens.toLocaleString()}
+                      </span>
+                    </div>
+                  ) : null}
+                  {webSearchArmed ? (
+                    <div className="text-[11px] text-sky-700 dark:text-sky-300">
+                      + Live Tavily web search results will be added on send
+                    </div>
+                  ) : null}
                 </div>
-                <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                  <div
-                    className={`h-full transition-all duration-300 ${
-                      usagePct >= 85
-                        ? 'bg-rose-600'
-                        : usagePct >= 60
-                        ? 'bg-amber-500'
-                        : 'bg-sky-600'
-                    }`}
-                    style={{ width: `${Math.max(1, usagePct)}%` }}
-                  />
+
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+                    <span>Total Pressure</span>
+                    <span>
+                      {displayTotalTokens.toLocaleString()} /{' '}
+                      {GEMINI_CONTEXT_WINDOW_TOKENS.toLocaleString()} ({usagePct.toFixed(1)}%)
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-300 ${
+                        usagePct >= 85
+                          ? 'bg-rose-600'
+                          : usagePct >= 60
+                          ? 'bg-amber-500'
+                          : 'bg-sky-600'
+                      }`}
+                      style={{ width: `${Math.max(1, usagePct)}%` }}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
-          ) : null}
+            ) : null}
 
-          <button
-            type="button"
-            onClick={() => setIsTokenPopoverOpen((v) => !v)}
-            aria-expanded={isTokenPopoverOpen}
-            aria-label={`Next message tokens: ${displayTotalTokens.toLocaleString()} of ${GEMINI_CONTEXT_WINDOW_TOKENS.toLocaleString()}`}
-            title="Tokens for next message (click for full breakdown)"
-            className={`h-9 px-3 rounded-lg border inline-flex items-center justify-center gap-1.5 text-xs font-medium tabular-nums whitespace-nowrap transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-sky-600 ${tokenPressureClass}`}
-          >
-            <Gauge className="w-3.5 h-3.5 shrink-0 opacity-80" />
-            <span>{displayTotalTokens.toLocaleString()}</span>
-            <span className="hidden sm:inline text-slate-400 dark:text-slate-500 font-normal">
-              / {GEMINI_CONTEXT_WINDOW_TOKENS.toLocaleString()}
-            </span>
-            <span className="sm:hidden text-slate-400 dark:text-slate-500 font-normal">
-              / 1M
-            </span>
-          </button>
-        </div>
-
-        {/* Center: Auto-growing text box */}
-        <div className="flex-1 min-w-0 flex items-end gap-1.5">
-          <label htmlFor="chat-composer-input" className="sr-only">
-            Ask your study tutor
-          </label>
-          <textarea
-            id="chat-composer-input"
-            ref={textareaRef}
-            dir="auto"
-            rows={1}
-            value={input}
-            onChange={(e) => onChangeInput(e.target.value)}
-            onPaste={handlePaste}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                submitMessage();
-              }
-            }}
-            placeholder="Ask a question…"
-            className="bidi-plaintext w-full min-h-9 resize-none overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60 px-3 py-1.5 text-sm leading-[22px] text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-sky-500 dark:focus:border-sky-500 transition-colors"
-          />
-          {isStreaming ? (
             <button
               type="button"
-              onClick={onCancelStream}
-              aria-label="Stop generating"
-              title="Stop generating"
-              className="h-9 px-2.5 rounded-lg bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 text-white text-xs font-medium inline-flex items-center gap-1.5 shrink-0 transition-colors"
+              onClick={() => setIsTokenPopoverOpen((v) => !v)}
+              aria-expanded={isTokenPopoverOpen}
+              aria-label={`Next message tokens: ${displayTotalTokens.toLocaleString()} of ${GEMINI_CONTEXT_WINDOW_TOKENS.toLocaleString()}`}
+              title="Context window usage"
+              className={`pointer-events-auto h-10 px-3 rounded-xl border backdrop-blur-md shadow-[0_4px_14px_rgba(15,23,42,0.06)] inline-flex items-center justify-center gap-1.5 text-xs font-medium tabular-nums whitespace-nowrap transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-sky-600 ${tokenPressureClass}`}
             >
-              <Square className="w-3 h-3 fill-current" />
-              <span>Stop</span>
+              <Gauge className="w-[15px] h-[15px] shrink-0" />
+              <span>
+                {displayTotalTokens.toLocaleString()} /{' '}
+                <span className="hidden sm:inline">{GEMINI_CONTEXT_WINDOW_TOKENS.toLocaleString()}</span>
+                <span className="sm:hidden">1M</span>
+              </span>
             </button>
-          ) : null}
-        </div>
+          </div>
 
-        {/* Right: Microphone button */}
-        <button
-          type="button"
-          onClick={handleToggleMic}
-          disabled={!isRecording && isTranscribing}
-          aria-label={
-            isRecording
-              ? 'Stop recording'
-              : isTranscribing
-              ? 'Finishing transcription'
-              : 'Voice input'
-          }
-          title={
-            isRecording
-              ? 'Recording — automatically transcribes pauses in the background'
-              : 'Voice transcription (STT)'
-          }
-          className={`h-9 w-9 inline-flex items-center justify-center rounded-lg border transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-sky-600 ${
-            isRecording
-              ? 'bg-red-600 border-red-600 text-white hover:bg-red-700 animate-pulse'
-              : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          {isRecording ? (
-            <MicOff className="w-4 h-4" />
-          ) : isTranscribing ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Mic className="w-4 h-4" />
-          )}
-        </button>
+          {/* Textbox + Inner Mic Button (Press Enter to Send) */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submitMessage();
+            }}
+            className="pointer-events-auto flex-1 min-w-0 min-h-10 py-[3px] pl-[14px] pr-[5px] rounded-xl border border-[#e2e8f0] dark:border-slate-700/80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md shadow-[0_4px_14px_rgba(15,23,42,0.06)] flex items-end gap-1.5 transition-[border-color,box-shadow] duration-150 focus-within:border-[#93c5fd] dark:focus-within:border-sky-500/80 focus-within:shadow-[0_4px_14px_rgba(15,23,42,0.06),0_0_0_3px_rgba(37,99,235,0.08)]"
+          >
+            <label htmlFor="chat-composer-input" className="sr-only">
+              Ask your study tutor
+            </label>
+            <textarea
+              id="chat-composer-input"
+              ref={textareaRef}
+              dir="auto"
+              rows={1}
+              value={input}
+              onChange={(e) => onChangeInput(e.target.value)}
+              onPaste={handlePaste}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void submitMessage();
+                }
+              }}
+              placeholder="Ask a question..."
+              className="bidi-plaintext flex-1 min-w-0 self-center min-h-8 resize-none overflow-hidden border-0 bg-transparent py-[5px] text-[13.5px] leading-[22px] text-[#0f172a] dark:text-slate-100 placeholder:text-[#94a3b8] dark:placeholder:text-slate-500 focus:outline-none"
+            />
+            {isStreaming ? (
+              <button
+                type="button"
+                onClick={onCancelStream}
+                aria-label="Stop generating"
+                title="Stop generating"
+                className="h-[30px] mb-[1px] px-2.5 rounded-lg bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 text-white text-xs font-medium inline-flex items-center gap-1.5 shrink-0 transition-colors"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                <span>Stop</span>
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleToggleMic}
+              disabled={!isRecording && isTranscribing}
+              aria-pressed={isRecording}
+              aria-label={
+                isRecording
+                  ? 'Stop recording'
+                  : isTranscribing
+                  ? 'Finishing transcription'
+                  : 'Voice input'
+              }
+              title={isRecording ? 'Stop recording and send' : 'Voice input'}
+              className={`w-[30px] h-[30px] mb-[1px] rounded-lg border inline-flex items-center justify-center shrink-0 transition-all duration-150 focus-visible:outline-2 focus-visible:outline-sky-600 ${
+                isRecording
+                  ? 'bg-[#eff6ff] dark:bg-sky-950/60 border-[#93c5fd] dark:border-sky-500/70 text-[#2563eb] dark:text-sky-400'
+                  : 'border-transparent bg-transparent text-[#64748b] dark:text-slate-400 hover:bg-[#f1f5f9] dark:hover:bg-slate-800 hover:text-[#0f172a] dark:hover:text-slate-100'
+              }`}
+            >
+              {isRecording ? (
+                <Square className="w-3.5 h-3.5 fill-current" />
+              ) : isTranscribing ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Mic className="w-4 h-4" />
+              )}
+            </button>
+          </form>
+        </div>
       </footer>
 
       {/* Image Zoom Lightbox */}

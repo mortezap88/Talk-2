@@ -15,6 +15,9 @@ import type {
 
 import { localWorkspaceStore } from '../utils/localStore';
 import type { PersistedWorkspace } from '../utils/seedData';
+import { firestoreWorkspaceStore } from '../firebase/firestoreStore';
+
+let activeFirebaseUid: string | null = null;
 
 async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -45,11 +48,25 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const talkApi = {
+  setFirebaseUser(uid: string | null): void {
+    activeFirebaseUid = uid;
+  },
+
+  getFirebaseUserId(): string | null {
+    return activeFirebaseUid;
+  },
+
   async listChats(): Promise<ChatItem[]> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.listChats(activeFirebaseUid);
+    }
     return localWorkspaceStore.listChats();
   },
 
   async createChat(title?: string): Promise<ChatItem> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.createChat(activeFirebaseUid, title);
+    }
     return localWorkspaceStore.createChat(title);
   },
 
@@ -57,22 +74,85 @@ export const talkApi = {
     id: string,
     patch: Partial<Pick<ChatItem, 'title' | 'messages' | 'updatedAt'>>
   ): Promise<ChatItem> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.updateChat(activeFirebaseUid, id, patch);
+    }
     return localWorkspaceStore.updateChat(id, patch);
   },
 
   async deleteChat(id: string): Promise<void> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.deleteChat(activeFirebaseUid, id);
+    }
     return localWorkspaceStore.deleteChat(id);
   },
 
   async kvGet<T>(key: string): Promise<T | null> {
+    if (activeFirebaseUid) {
+      const colonIdx = key.indexOf(':');
+      if (colonIdx !== -1) {
+        const prefix = key.slice(0, colonIdx);
+        const chatId = key.slice(colonIdx + 1);
+        if (prefix === 'note') {
+          return (await firestoreWorkspaceStore.getNote(activeFirebaseUid, chatId)) as T | null;
+        }
+        if (prefix === 'textbook') {
+          return (await firestoreWorkspaceStore.getTextbook(activeFirebaseUid, chatId)) as T | null;
+        }
+        if (prefix === 'questions') {
+          return (await firestoreWorkspaceStore.getQuestions(activeFirebaseUid, chatId)) as T | null;
+        }
+        if (prefix === 'memory') {
+          return (await firestoreWorkspaceStore.getMemory(activeFirebaseUid, chatId)) as T | null;
+        }
+      }
+    }
     return localWorkspaceStore.getKv<T>(key);
   },
 
   async kvSet<T>(key: string, value: T): Promise<T> {
+    if (activeFirebaseUid) {
+      const colonIdx = key.indexOf(':');
+      if (colonIdx !== -1) {
+        const prefix = key.slice(0, colonIdx);
+        const chatId = key.slice(colonIdx + 1);
+        if (prefix === 'note') {
+          return (await firestoreWorkspaceStore.saveNote(
+            activeFirebaseUid,
+            chatId,
+            value as unknown as NoteData
+          )) as unknown as T;
+        }
+        if (prefix === 'textbook') {
+          return (await firestoreWorkspaceStore.saveTextbook(
+            activeFirebaseUid,
+            chatId,
+            value as unknown as TextbookData
+          )) as unknown as T;
+        }
+        if (prefix === 'questions') {
+          return (await firestoreWorkspaceStore.saveQuestions(
+            activeFirebaseUid,
+            chatId,
+            value as unknown as StoredQuestion[]
+          )) as unknown as T;
+        }
+        if (prefix === 'memory') {
+          return (await firestoreWorkspaceStore.saveMemory(
+            activeFirebaseUid,
+            chatId,
+            value as unknown as ChatMemory
+          )) as unknown as T;
+        }
+      }
+    }
     return localWorkspaceStore.setKv<T>(key, value);
   },
 
   async listCards(chatId?: string): Promise<FlashcardItem[]> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.listCards(activeFirebaseUid, chatId);
+    }
     return localWorkspaceStore.listCards(chatId);
   },
 
@@ -83,6 +163,9 @@ export const talkApi = {
     answer: string;
     subject: string;
   }): Promise<FlashcardItem> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.createCard(activeFirebaseUid, input);
+    }
     return localWorkspaceStore.createCard(input);
   },
 
@@ -90,24 +173,39 @@ export const talkApi = {
     id: string,
     patch: Partial<Pick<FlashcardItem, 'question' | 'answer' | 'status' | 'subject'>>
   ): Promise<FlashcardItem> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.updateCard(activeFirebaseUid, id, patch);
+    }
     return localWorkspaceStore.updateCard(id, patch);
   },
 
   async deleteCard(id: string): Promise<void> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.deleteCard(activeFirebaseUid, id);
+    }
     return localWorkspaceStore.deleteCard(id);
   },
 
   async listSubjects(): Promise<string[]> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.listSubjects(activeFirebaseUid);
+    }
     return localWorkspaceStore.listSubjects();
   },
 
   async getSettings(): Promise<AppSettings> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.getSettings(activeFirebaseUid);
+    }
     return localWorkspaceStore.getSettings();
   },
 
   async updateSettings(
     patch: Partial<Pick<AppSettings, 'provider' | 'geminiModel' | 'thinkingLevel' | 'themeMode'>>
   ): Promise<AppSettings> {
+    if (activeFirebaseUid) {
+      return firestoreWorkspaceStore.updateSettings(activeFirebaseUid, patch);
+    }
     return localWorkspaceStore.updateSettings(patch);
   },
 

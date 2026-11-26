@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pencil, Pin, PinOff, Plus, Trash2, X } from 'lucide-react';
+import { LogIn, LogOut, Pencil, Pin, PinOff, Plus, Trash2, X } from 'lucide-react';
 import type { ChatItem } from '../types/talk';
 import { formatRelativeTime } from '../utils/formatters';
 
@@ -8,6 +8,11 @@ interface ChatManagerDrawerProps {
   activeChatId: string | null;
   isOpen: boolean;
   isPinned: boolean;
+  isFirebaseConnected: boolean;
+  userDisplayName?: string | null;
+  userEmail?: string | null;
+  onSignInWithGoogle: () => Promise<void>;
+  onSignOut: () => Promise<void>;
   onCloseDrawer: () => void;
   onTogglePin: () => void;
   onSelectChat: (chatId: string) => void;
@@ -21,6 +26,11 @@ export function ChatManagerDrawer({
   activeChatId,
   isOpen,
   isPinned,
+  isFirebaseConnected,
+  userDisplayName,
+  userEmail,
+  onSignInWithGoogle,
+  onSignOut,
   onCloseDrawer,
   onTogglePin,
   onSelectChat,
@@ -124,7 +134,7 @@ export function ChatManagerDrawer({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className="chat-scroll flex-1 overflow-y-auto p-2 space-y-1">
           {chats.length === 0 ? (
             <p className="px-3 py-6 text-xs text-slate-500 dark:text-slate-400 text-center">
               No chats yet. Start a new conversation above.
@@ -209,6 +219,39 @@ export function ChatManagerDrawer({
                 </div>
               );
             })
+          )}
+        </div>
+
+        <div className="p-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70">
+          {isFirebaseConnected ? (
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
+                  {userDisplayName || 'Signed in'}
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                  {userEmail || 'Synced to Firestore'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void onSignOut()}
+                aria-label="Sign out"
+                title="Sign out"
+                className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md text-slate-500 dark:text-slate-400 hover:bg-slate-200/70 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void onSignInWithGoogle()}
+              className="w-full py-1.5 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <LogIn className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
+              <span>Sign in with Google</span>
+            </button>
           )}
         </div>
       </aside>

@@ -15,16 +15,20 @@ import {
   getQuoteAllowance,
   getTargetSummaryTokens,
   insertRollingPack,
+  mergeLearnerState,
   needsCompaction,
   PACK_SLOTS,
+  sanitizeMemoryPackOutput,
   selectCompactionChunk,
   sortLearnerState,
+  stripHighlightMarkup,
   TEXTBOOK_MAX_CHARS,
   TEXTBOOK_MAX_IMAGES,
 } from './memoryEngine';
 import type { ChatMessage, ConceptState, MemoryPack } from '../types/talk';
 import {
   computeComposerLayout,
+  dedupeById,
   normalizeThinkingLevelForModel,
   supportsXhighThinking,
 } from './formatters';
@@ -519,6 +523,13 @@ test('SilenceAudioChunker waits at least 20s, refreshes silence timer while spea
   chunker.flush();
   assert.equal(emitted.length, 2);
 
+  // Soft-spoken mic levels (e.g., amplitude 0.015 -> RMS ~0.01) still flush cleanly on stop
+  for (let i = 0; i < 6; i++) {
+    chunker.push(makeFrame(100, 0.015));
+  }
+  chunker.flush();
+  assert.equal(emitted.length, 3);
+
   const wav = encodeMonoWav(makeFrame(50, 0.1), TARGET_SAMPLE_RATE);
   assert.equal(wav.size, 44 + 800 * 2);
 });
@@ -588,4 +599,87 @@ test('paper restructuring helpers adjust alignment, width, order, split, merge, 
   assert.deepEqual(withInserted.map((b) => b.id), ['t1', 'f1', 't3']);
   assert.equal(withInserted[2].content, 'Side note');
 });
+
+test('dedupeById removes duplicate IDs from concurrent optimistic and snapshot updates', () => {
+  const result = dedupeById([
+    { id: 'chat_a4d9c3d2-9e4', title: 'New session' },
+    { id: 'chat_bio_bohr', title: 'Biology' },
+    { id: 'chat_a4d9c3d2-9e4', title: 'New session' },
+  ]);
+  assert.deepEqual(result.map((c) => c.id), ['chat_a4d9c3d2-9e4', 'chat_bio_bohr']);
+});
+
+test('stripHighlightMarkup and sanitizeMemoryPackOutput clean leaked highlight tags while preserving math and C++', () => {
+  const dirty =
+    'Covered ==session memory==, @@CIP rule@@, ++right shift++, and `!!pitfall!!` plus C++ and g++ with $E = mc^2$.';
+  assert.equal(
+    stripHighlightMarkup(dirty),
+    'Covered session memory, CIP rule, right shift, and pitfall plus C++ and g++ with $E = mc^2$.'
+  );
+
+  const sanitized = sanitizeMemoryPackOutput({
+    summary: '**Subtopics Covered:** ==Bohr Effect== and !!exam traps pitfall!!.',
+    bullets: [
+      '- Covered ==Bohr Effect==',
+      'Covered Bohr Effect',
+      'Resolved `!!sign confusion!!`',
+    ],
+  });
+  assert.equal(sanitized.summary, '**Subtopics Covered:** Bohr Effect and exam traps pitfall.');
+  assert.deepEqual(sanitized.bullets, ['Covered Bohr Effect', 'Resolved sign confusion']);
+});
+
+test('mergeLearnerState preserves existing concepts, promotes improvements, and caps at 24', () => {
+  const existing: ConceptState[] = [
+    {
+      id: 'c_keq',
+      concept: 'Keq vs Q',
+      status: 'misunderstood',
+      note: 'Mixed up equilibrium constant with reaction quotient',
+      updatedAt: 1000,
+    },
+    {
+      id: 'c_hill',
+      concept: 'Hill Coefficient',
+      status: 'shaky',
+      note: 'Needs practice interpreting nH slope',
+      updatedAt: 900,
+    },
+  ];
+  const incoming: ConceptState[] = [
+    {
+      id: 'cs_new_1',
+      concept: '==Keq vs Q==',
+      status: 'understood',
+      note: 'Improved: correctly used Q < Keq to predict forward shift',
+      updatedAt: 2000,
+    },
+    {
+      id: 'cs_new_2',
+      concept: 'Entropy Sign',
+      status: 'unresolved',
+      note: 'Open question on surroundings entropy sign',
+      updatedAt: 2000,
+    },
+  ];
+
+  const merged = mergeLearnerState(existing, incoming, 2000);
+  assert.deepEqual(
+    merged.map((c) => [c.id, c.concept, c.status]),
+    [
+      ['cs_new_2', 'Entropy Sign', 'unresolved'],
+      ['c_hill', 'Hill Coefficient', 'shaky'],
+      ['c_keq', 'Keq vs Q', 'understood'],
+    ]
+  );
+
+  const assembled = assembleContextPrompt({
+    memory: { ...createEmptyMemory(2000), learnerState: merged },
+    messages: [{ id: 'm1', role: 'user', content: 'Continue', createdAt: 2000 }],
+  });
+  assert.ok(assembled.systemPrompt.includes('### Blindspots & Open Gaps'));
+  assert.ok(assembled.systemPrompt.includes('### Understanding Improvements & Mastered'));
+  assert.ok(assembled.systemPrompt.includes('Improved: correctly used Q < Keq'));
+});
+
 
